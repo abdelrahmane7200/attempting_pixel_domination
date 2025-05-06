@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+
+    <head>
+        <meta charset="UTF-8">
+        <title>Pixel Domination Game</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+        <link rel="icon" href="data:,">
+        <style>
+            body {
+                font-family: sans-serif;
+                margin: 0;
+                display: flex;
+            }
+
+            #leaderboard {
+                padding: 10px;
+                background: #f7f7f7;
+                width: 200px;
+                height: 100vh;
+                overflow-y: auto;
+                box-shadow: 2px 0px 5px rgba(0, 0, 0, 0.1);
+            }
+
+            #leaderboard h2 {
+                margin-top: 0;
+            }
+
+            canvas {
+                display: block;
+            }
+
+            #playerGameStatus {
+                position: fixed;
+                bottom: 10px;
+                left: 220px;
+                background: #fff3cd;
+                color: #856404;
+                border: 1px solid #ffeeba;
+                padding: 5px 10px;
+                border-radius: 5px;
+                font-family: sans-serif;
+                font-weight: bold;
+            }
+
+            .canvas-overlay {
+                position: absolute;
+                top: 0;
+                left: 200px;
+                pointer-events: none;
+                width: calc(100% - 200px);
+                height: 100vh;
+                background-color: rgba(255, 255, 255, 0.5);
+                display: none;
+                z-index: 10;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div id="leaderboard">
+            <h2>Leaderboard</h2>
+            <ul id="scores"></ul>
+        </div>
+        <p id="playerGameStatus">Status: Loading...</p>
+        <div class="canvas-overlay" id="canvasOverlay"></div>
+
+        <script>
+            const gridSize = 50;
+            const cellSize = 20;
+            let grid = {};
+            let playerName = null;
+            let playerColor = null;
+            let scores = {};
+            let gameFrozen = false;
+            let ws = null;
+            let wsReady = false;
+            let messageQueue = [];
+            let sprite = null;
+            let moveCooldown = 50;
+            let lastMoveTime = 0;
+            const MAX_RETRIES = 5;
+            let retryCount = 0;
+            let retryDelay = 1000;
+            let gameStarted = false;
+
+            function getRandomDirection() {
+                const directions = ['up', 'down', 'left', 'right'];
+                return directions[Math.floor(Math.random() * directions.length)];
+            }
+
+            function sendWsMessage(message) {
+                if (!ws || !wsReady) {
+                    messageQueue.push(message);
+                    return;
+                }
+                try {
+                    ws.send(JSON.stringify(message));
+                } catch (error) {
+                    console.error("Failed to send message:", error);
+                    messageQueue.push(message);
+                }
+            }
+
+            function connectWebSocket() {
+                if (!playerName || wsReady) return;
+
+                wsReady = false;
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                document.getElementById("playerGameStatus").textContent = `Status: Connecting to ${wsUrl}...`;
+                console.log("Attempting connection to:", wsUrl);
+
+                try {
+                    if (ws && ws.readyState !== WebSocket.CLOSED) {
+                        ws.close();
+                    }
+
+                    ws = new WebSocket(wsUrl);
+                    ws.binaryType = "arraybuffer";
+
+                    // Add connection timeout
+                    const connectionTimeout = setTimeout(() => {
+                        if (!wsReady) {
+                            console.log("Connection attempt timed out");
+                            ws.close();
+                            document.getElementById("playerGameStatus").textContent = "Status: Connection timeout";
+                        }
+                    }, 5000);
+
+                    ws.onopen = () => {
+                        clearTimeout(connectionTimeout);
+                        console.log("Connected to server");
+                        wsReady = true;
+                        retryCount = 0;
+                        retryDelay = 1000;
+                        document.getElementById("playerGameStatus").textContent = "Status: Connected";
+
+                        // Register player immediately after connection
+                        sendWsMessage({
+                            type: "join",
+                            name: playerName,
+                            color: playerColor
+                        });
+
+                        if (!gameStarted) {
+                            gameStarted = true;
+                            loop();
+                        }
+                    };
+
+                    ws.onmessage = (event) => {
+                        const state = JSON.parse(event.data);
+                        grid = state.grid;
+                        scores = state.players;
+                        gameFrozen = state.frozen;
+
+                        updateLeaderboard();
+                        updateGameStatus();
+                    };
+
+                    ws.onclose = (event) => {
+                        clearTimeout(connectionTimeout);
+                        wsReady = false;
+                        console.log("Connection closed:", event.code, event.reason);
+
+                        if (retryCount < MAX_RETRIES) {
+                            console.log(`Retrying in ${retryDelay}ms... (${retryCount + 1}/${MAX_RETRIES})`);
+                            setTimeout(connectWebSocket, retryDelay);
+                            retryCount++;
+                            retryDelay *= 2;
+                        } else {
+                            console.log("Max retries reached. Please refresh the page.");
+                            alert("Connection lost. Please refresh the page.");
+                            noLoop();
+                        }
+                    };
+
+                    ws.onerror = (error) => {
+                        console.error("WebSocket error:", error);
+                    };
+                } catch (error) {
+                    console.error("WebSocket creation error:", error);
+                    wsReady = false;
+                    document.getElementById("playerGameStatus").textContent = "Status: Connection failed";
+                }
+            }
+
+            function initGame() {
+                playerName = prompt("Enter your name:")?.trim();
+                if (!playerName) {
+                    alert("Game canceled.");
+                    return false;
+                }
+
+                playerColor = getRandomColor();
+                sprite = {
+                    x: Math.floor(gridSize / 2),
+                    y: Math.floor(gridSize / 2),
+                    direction: getRandomDirection()
+                };
+
+                noLoop(); // Stop the game loop until connection is established
+                connectWebSocket();
+                initAdminControls();
+                return true;
+            }
+
+            function updateGameStatus() {
+                const statusText = gameFrozen ? "Frozen ❄️" : "Active 🔥";
+                document.getElementById("playerGameStatus").textContent = "Status: " + statusText;
+                document.getElementById("canvasOverlay").style.display = gameFrozen ? "block" : "none";
+
+                // Update admin panel if it exists
+                const gameStatus = document.getElementById("gameStatus");
+                if (gameStatus) {
+                    gameStatus.textContent = statusText;
+                }
+            }
+
+            window.setup = function() {
+                createCanvas(gridSize * cellSize, gridSize * cellSize);
+                if (!initGame()) {
+                    noLoop();
+                    return;
+                }
+            };
+
+            function moveSprite() {
+                if (sprite.direction === 'up') sprite.y--;
+                if (sprite.direction === 'down') sprite.y++;
+                if (sprite.direction === 'left') sprite.x--;
+                if (sprite.direction === 'right') sprite.x++;
+
+                // Wrap around
+                if (sprite.x < 0) sprite.x = gridSize - 1;
+                if (sprite.x >= gridSize) sprite.x = 0;
+                if (sprite.y < 0) sprite.y = gridSize - 1;
+                if (sprite.y >= gridSize) sprite.y = 0;
+
+                claimCell(sprite.x, sprite.y);
+            }
+
+            function claimCell(x, y) {
+                if (!wsReady) return; // Don't try to claim cells if not connected
+
+                const key = `${x}_${y}`;
+                const current = grid[key];
+
+                if (current && current.owner === playerName) return;
+
+                sendWsMessage({
+                    type: "claim",
+                    cell: key,
+                    player: playerName
+                });
+            }
+
+            window.draw = function() {
+                if (!wsReady) return; // Don't update if not connected
+                background(255);
+                stroke(0);
+
+                // Draw the grid
+                for (let y = 0; y < gridSize; y++) {
+                    for (let x = 0; x < gridSize; x++) {
+                        const key = `${x}_${y}`;
+                        const box = grid[key];
+                        fill(box ? box.color : '#eee');
+                        rect(x * cellSize, y * cellSize, cellSize, cellSize);
+                    }
+                }
+
+                if (!gameFrozen && sprite.direction) {
+                    const now = millis();
+                    if (now - lastMoveTime >= moveCooldown) {
+                        lastMoveTime = now;
+                        moveSprite();
+                    }
+                }
+
+                // Draw player sprite
+                fill(0, 127);
+                noStroke();
+                ellipse(
+                    sprite.x * cellSize + cellSize / 2,
+                    sprite.y * cellSize + cellSize / 2,
+                    cellSize * 2,
+                    cellSize * 2
+                );
+            };
+
+            window.keyPressed = function() {
+                if (gameFrozen) return;
+
+                if (sprite.direction === 'random') return;
+
+                if (key === 'w' || key === 'W') sprite.direction = 'up';
+                else if (key === 's' || key === 'S') sprite.direction = 'down';
+                else if (key === 'a' || key === 'A') sprite.direction = 'left';
+                else if (key === 'd' || key === 'D') sprite.direction = 'right';
+            };
+
+            function getRandomColor() {
+                return '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+            }
+
+            function updateLeaderboard() {
+                const scoreList = document.getElementById('scores');
+                scoreList.innerHTML = '';
+
+                const sorted = Object.entries(scores)
+                    .map(([name, data]) => ({ name, score: data.score || 0, color: data.color }))
+                    .sort((a, b) => b.score - a.score);
+
+                for (let player of sorted) {
+                    const li = document.createElement('li');
+                    li.textContent = `${player.name}: ${player.score}`;
+                    if (player.color) {
+                        li.style.color = player.color;
+                    }
+                    scoreList.appendChild(li);
+                }
+            }
+
+            function initAdminControls() {
+                if (!playerName) return;
+
+                if (playerName.toLowerCase() === 'admin') {
+                    document.getElementById('adminPanel').style.display = 'block';
+                    document.getElementById('freezeBtn').onclick = () => {
+                        sendWsMessage({
+                            type: "admin",
+                            action: "freeze"
+                        });
+                    };
+                    document.getElementById('unfreezeBtn').onclick = () => {
+                        sendWsMessage({
+                            type: "admin",
+                            action: "unfreeze"
+                        });
+                    };
+                    document.getElementById('resetBtn').onclick = () => {
+                        if (confirm('Are you sure you want to reset the game?')) {
+                            sendWsMessage({
+                                type: "admin",
+                                action: "reset"
+                            });
+                        }
+                    };
+                }
+            }
+        </script>
+
+        <div id="adminPanel"
+            style="position: fixed; top: 10px; right: 10px; background: #fff; padding: 10px; border: 1px solid #ccc; display: none;">
+            <strong>Admin Controls</strong><br><br>
+            <button id="freezeBtn">Freeze</button>
+            <button id="unfreezeBtn">Unfreeze</button>
+            <button id="resetBtn">Reset</button>
+            <p>Status: <span id="gameStatus">Active 🔥</span></p>
+        </div>
+    </body>
+
+</html>
