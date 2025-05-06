@@ -106,8 +106,8 @@
                 if (!playerName || wsReady) return;
 
                 wsReady = false;
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                // Change the WebSocket URL to point to deployed server
+                const wsUrl = 'wss://abdelrahmane7200.github.io/ws';  // Replaced with actual server URL
                 document.getElementById("playerGameStatus").textContent = `Status: Connecting to ${wsUrl}...`;
                 console.log("Attempting connection to:", wsUrl);
 

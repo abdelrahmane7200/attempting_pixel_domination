@@ -13,13 +13,17 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "*",
+        "https://abdelrahmane7200.github.io",  # Add the GitHub Pages domain
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
-    allow_origin_regex=r"https://.*\.app\.github\.dev"
+    allow_origin_regex=r"https://.*\.github\.io"  # Allow all GitHub Pages domains
 )
+
 
 @dataclass
 class Player:
@@ -27,10 +31,12 @@ class Player:
     color: str
     score: int = 0
 
+
 @dataclass
 class Cell:
     owner: str
     color: str
+
 
 class GameState:
     def __init__(self):
@@ -58,11 +64,14 @@ class GameState:
 
         self.connections -= dead_connections
 
+
 game_state = GameState()
+
 
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -130,7 +139,8 @@ async def websocket_endpoint(websocket: WebSocket):
             if websocket.client_state != WebSocketState.DISCONNECTED:
                 await websocket.close()
 
-app.mount("/", StaticFiles(directory=".", html=True, check_dir=False), name="static")
+app.mount("/", StaticFiles(directory=".", html=True,
+          check_dir=False), name="static")
 
 if __name__ == "__main__":
     import uvicorn
@@ -138,7 +148,8 @@ if __name__ == "__main__":
     from uvicorn.config import LOGGING_CONFIG
 
     LOGGING_CONFIG["formatters"]["default"]["fmt"] = "%(asctime)s - %(levelname)s - %(message)s"
-    LOGGING_CONFIG["formatters"]["access"]["fmt"] = '%(asctime)s - %(levelname)s - %(client_addr)s - "%(request_line)s" %(status_code)s'
+    LOGGING_CONFIG["formatters"]["access"][
+        "fmt"] = '%(asctime)s - %(levelname)s - %(client_addr)s - "%(request_line)s" %(status_code)s'
 
     config = uvicorn.Config(
         app,
